@@ -1,0 +1,12 @@
+# Kaggle/AWS reproducible environment. PyTorch is supplied by the CUDA image.
+numpy==1.26.4
+pandas==2.2.3
+pyarrow==19.0.1
+scipy==1.15.1
+scikit-learn==1.6.1
+xgboost==2.1.4
+PyYAML==6.0.2
+rapidfuzz==3.12.1
+sparse-dot-topn==1.1.5
+sentence-transformers==3.4.1
+faiss-cpu==1.10.0

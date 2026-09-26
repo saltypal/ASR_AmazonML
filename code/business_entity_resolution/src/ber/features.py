@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+from rapidfuzz import fuzz
+
+from .candidates import SIGNAL_COLUMNS
+from .normalization import number_jaccard, token_jaccard
+
+
+FEATURE_COLUMNS = [
+    "name_retrieval_lane",
+    "address_retrieval_lane",
+    "dense_retrieval_lane",
+    "retrieval_rank_score",
+    "dense_score",
+    "exact_name",
+    "exact_address",
+    "exact_name_core",
+    "exact_numbers",
+    "name_ratio",
+    "name_token_set_ratio",
+    "name_jaccard",
+    "address_ratio",
+    "address_token_set_ratio",
+    "address_jaccard",
+    "number_jaccard",
+    "postal_exact",
+    "name_exact_normalized",
+    "name_core_exact",
+    "address_exact_normalized",
+    "country_equal",
+    "name_script_equal",
+    "cross_script_name",
+    "query_address_missing",
+    "candidate_address_missing",
+    "name_length_ratio",
+    "address_length_ratio",
+    "target_is_source3",
+]
+
+
+def _ratio(left: str, right: str) -> float:
+    return fuzz.ratio(left, right, score_cutoff=0) / 100.0
+
+
+def _token_set_ratio(left: str, right: str) -> float:
+    return fuzz.token_set_ratio(left, right, score_cutoff=0) / 100.0
+
+
+def _length_ratio(left: pd.Series, right: pd.Series) -> np.ndarray:
+    left_length = left.str.len().to_numpy(dtype=np.float32)
+    right_length = right.str.len().to_numpy(dtype=np.float32)
+    maximum = np.maximum(left_length, right_length)
+    minimum = np.minimum(left_length, right_length)
+    return np.divide(minimum, maximum, out=np.ones_like(minimum), where=maximum > 0)
+
+
+def build_pair_features(
+    pairs: pd.DataFrame,
+    queries: pd.DataFrame,
+    candidates: pd.DataFrame,
+) -> pd.DataFrame:
+    if pairs.empty:
+        return pd.DataFrame(columns=["source1_entity_id", "candidate_entity_id", "target_source", *FEATURE_COLUMNS])
+    query_columns = [
+        "entity_id", "name_norm", "name_punct", "name_core", "address_norm", "address_punct",
+        "address_numbers", "postal_token", "name_script", "country",
+    ]
+    candidate_columns = query_columns
+    query_lookup = queries[query_columns].rename(
+        columns={column: f"q_{column}" for column in query_columns if column != "entity_id"}
+    ).rename(columns={"entity_id": "source1_entity_id"})
+    candidate_lookup = candidates[candidate_columns].rename(
+        columns={column: f"c_{column}" for column in candidate_columns if column != "entity_id"}
+    ).rename(columns={"entity_id": "candidate_entity_id"})
+    merged = pairs.merge(query_lookup, on="source1_entity_id", how="left", validate="many_to_one")
+    merged = merged.merge(candidate_lookup, on="candidate_entity_id", how="left", validate="many_to_one")
+    required_text = ["q_name_punct", "c_name_punct", "q_address_punct", "c_address_punct"]
+    if merged[required_text].isna().any().any():
+        raise ValueError("Candidate pairs contain IDs missing from the supplied source partitions.")
+    for column in SIGNAL_COLUMNS + ["retrieval_score"]:
+        if column not in merged:
+            merged[column] = 0.0
+        merged[column] = merged[column].fillna(0).astype(np.float32)
+    merged["name_retrieval_lane"] = merged["name_tfidf"].gt(0).astype(np.float32)
+    merged["address_retrieval_lane"] = merged["address_tfidf"].gt(0).astype(np.float32)
+    merged["dense_retrieval_lane"] = merged["dense_score"].gt(0).astype(np.float32)
+    retrieval_rank = merged.groupby("source1_entity_id")["retrieval_score"].rank(
+        method="first", ascending=False
+    )
+    group_size = merged.groupby("source1_entity_id")["retrieval_score"].transform("size")
+    denominator = (group_size - 1).clip(lower=1)
+    merged["retrieval_rank_score"] = (1.0 - (retrieval_rank - 1.0) / denominator).astype(np.float32)
+
+    q_name = merged["q_name_punct"].astype(str)
+    c_name = merged["c_name_punct"].astype(str)
+    q_address = merged["q_address_punct"].astype(str)
+    c_address = merged["c_address_punct"].astype(str)
+    name_pairs = zip(q_name, c_name)
+    address_pairs = zip(q_address, c_address)
+    merged["name_ratio"] = np.fromiter((_ratio(a, b) for a, b in name_pairs), dtype=np.float32)
+    merged["address_ratio"] = np.fromiter((_ratio(a, b) for a, b in address_pairs), dtype=np.float32)
+    merged["name_token_set_ratio"] = np.fromiter(
+        (_token_set_ratio(a, b) for a, b in zip(q_name, c_name)), dtype=np.float32
+    )
+    merged["address_token_set_ratio"] = np.fromiter(
+        (_token_set_ratio(a, b) for a, b in zip(q_address, c_address)), dtype=np.float32
+    )
+    merged["name_jaccard"] = np.fromiter(
+        (token_jaccard(a, b) for a, b in zip(q_name, c_name)), dtype=np.float32
+    )
+    merged["address_jaccard"] = np.fromiter(
+        (token_jaccard(a, b) for a, b in zip(q_address, c_address)), dtype=np.float32
+    )
+    merged["number_jaccard"] = np.fromiter(
+        (number_jaccard(a, b) for a, b in zip(q_address, c_address)), dtype=np.float32
+    )
+    merged["postal_exact"] = (
+        merged["q_postal_token"].ne("") & merged["q_postal_token"].eq(merged["c_postal_token"])
+    ).astype(np.float32)
+    merged["name_exact_normalized"] = merged["q_name_norm"].eq(merged["c_name_norm"]).astype(np.float32)
+    merged["name_core_exact"] = (
+        merged["q_name_core"].ne("") & merged["q_name_core"].eq(merged["c_name_core"])
+    ).astype(np.float32)
+    merged["address_exact_normalized"] = (
+        merged["q_address_norm"].ne("") & merged["q_address_norm"].eq(merged["c_address_norm"])
+    ).astype(np.float32)
+    merged["country_equal"] = merged["q_country"].eq(merged["c_country"]).astype(np.float32)
+    merged["name_script_equal"] = merged["q_name_script"].eq(merged["c_name_script"]).astype(np.float32)
+    merged["cross_script_name"] = (
+        merged["q_name_script"].ne(merged["c_name_script"])
+        & merged["q_name_script"].ne("NONE")
+        & merged["c_name_script"].ne("NONE")
+    ).astype(np.float32)
+    merged["query_address_missing"] = merged["q_address_norm"].eq("").astype(np.float32)
+    merged["candidate_address_missing"] = merged["c_address_norm"].eq("").astype(np.float32)
+    merged["name_length_ratio"] = _length_ratio(q_name, c_name)
+    merged["address_length_ratio"] = _length_ratio(q_address, c_address)
+    merged["target_is_source3"] = merged["target_source"].eq("S3").astype(np.float32)
+
+    output_columns = ["source1_entity_id", "candidate_entity_id", "target_source", *FEATURE_COLUMNS]
+    return merged[output_columns].copy()
+
+
+def label_pair_features(features: pd.DataFrame, truth: dict[str, set[str]]) -> pd.DataFrame:
+    labeled = features.copy()
+    labeled["label"] = np.fromiter(
+        (
+            candidate_id in truth.get(source1_id, set())
+            for source1_id, candidate_id in zip(
+                labeled["source1_entity_id"], labeled["candidate_entity_id"]
+            )
+        ),
+        dtype=np.int8,
+    )
+    return labeled

@@ -7,67 +7,121 @@
 ---
 
 ## 1. Executive Summary
-*Provide a brief 2-3 sentence overview of your approach and key innovations.*
+We use a high-recall blocking and supervised pair-classification pipeline for multilingual
+business entity resolution. Unicode-safe comparison views, exact/numeric blocks, character
+TF-IDF retrieval, and selective MIT-licensed multilingual E5 reranking produce candidates;
+XGBoost scores stable pair features and a validation-set threshold directly optimizes macro
+F0.5. The pipeline is reproducible on Kaggle T4 x2 and AWS EC2 G5 and writes both required
+TSV files through the official validator.
 
 ---
 
 ## 2. Methodology
 
 ### 2.1 Problem Analysis
-*Key insights discovered during EDA — noise patterns, address variations, missing fields, etc.*
+
+The task is one-to-zero-or-many linkage from deduplicated Source 1 to noisy Sources 2 and 3.
+The main engineering constraint is the comparison space: millions of rows make a Cartesian
+join impossible. Names contain spelling changes, legal-suffix variants, punctuation,
+abbreviations, transliterations, and multiple scripts. Addresses contain missing fields,
+reordered components, landmarks, abbreviations, and valuable numeric evidence. Singletons
+are part of the macro metric, and F0.5 makes false merges more expensive than missed links.
+
+Training contains US and India while test also contains France. Country is therefore treated
+as an open string and used only through equality/blocking, never a fixed one-hot vocabulary.
+The original text remains Unicode; translation to English is avoided because it can corrupt
+proper nouns and address evidence.
 
 ### 2.2 Solution Strategy
-*Outline your high-level approach.*
 
-**Approach Type:** [Blocking + Classifier / End-to-End / Graph-Based / Hybrid, etc]  
-**Core Innovation:** [Brief description of your main technical contribution]
+1. Validate TSV schemas and IDs while streaming bounded chunks.
+2. Create NFKC, case-folded, punctuation, legal-suffix, number, postal, and script views.
+3. Partition normalized records by country in compressed Parquet.
+4. Generate candidates from exact blocks and character TF-IDF name/address retrieval, then
+   optionally add E5 cosine evidence to bounded cross-script pairs.
+5. Cap candidates per S1 entity and measure candidate recall on train.
+6. Compute stable string, token, numeric, script, source, missingness, and retrieval-rank
+   features; retain all positives and the hardest negatives.
+7. Split by Source 1 entity into train, validation, and untouched holdout sets.
+8. Run a trial- and time-bounded randomized XGBoost search, refit on the full train split,
+   select the probability threshold on validation macro F0.5, and report holdout macro F0.5.
+9. Score test candidates, create complete output rows including empty singleton predictions,
+   and run the challenge validator.
+
+**Approach Type:** Hybrid multi-lane blocking plus supervised pair classifier
+**Core Innovation:** A Unicode-preserving retrieval cascade with corpus-stable pair features,
+entity-level validation, and runtime-bounded dual-GPU multilingual rescue.
 
 ---
 
 ## 3. Candidate Generation (Blocking)
-*Describe how you reduced the comparison space to a manageable candidate set.*
 
-- **Blocking keys used:** [e.g., PIN code, phonetic name encoding, TF-IDF, etc.]
-- **Candidate pairs generated:** [total]
-- **How you ensured true matches were not lost:**
+- **Blocking keys used:** normalized name, normalized address, legal-suffix-stripped name,
+  address-number signature, and character 3–5 gram TF-IDF for names and addresses.
+  Multilingual E5 cosine reranks up to a configured number of cross-script pairs per query.
+- **Candidate pairs generated:** `[populate from work/candidates/*/manifest.json after the
+  final run]`.
+- **How true matches are protected:** candidates are the union of independent lanes before a
+  per-query cap. Link recall and all-matches-per-entity recall are measured against training
+  truth per country. Candidate recall is treated as a hard gate because the classifier cannot
+  recover a pair removed during blocking.
 
 ---
 
 ## 4. Matching Model
 
 **Features used:**
-- Name features: [e.g., Jaccard, Levenshtein, phonetic encoding]
-- Address features: [e.g., token overlap, edit distance, PIN code matching]
-- Other: []
+- Name features: normalized/core exactness, RapidFuzz ratio and token-set ratio, token
+  Jaccard, length ratio, script equality, and cross-script indicator.
+- Address features: normalized exactness, RapidFuzz ratios, token and number Jaccard, postal
+  equality, length ratio, and missingness.
+- Other: retrieval-lane presence, within-query retrieval rank, E5 cosine, exact block
+  signals, country equality, and target source.
 
-**Model type:** [e.g., XGBoost, Siamese Network, Transformer, etc.]  
-**Threshold selection method:** [e.g., F_0.5 optimization on validation set]
+**Model type:** XGBoost binary classifier with GPU histogram training
+**Threshold selection method:** exhaustive threshold scan on validation entity-level macro
+F0.5 after bounded randomized hyperparameter search. The holdout split remains untouched
+until the final local evaluation.
 
 ---
 
 ## 5. Results & Error Analysis
 
-- **F_0.5 Score (macro):** [your best validation score]
-- **Common false positives (wrong merges):** [brief description]
-- **Common false negatives (missed matches):** [brief description]
+- **Validation macro F0.5:** `[populate from work/model/model_metadata.json]`
+- **Untouched holdout macro F0.5:** `[populate from work/completed_run.json]`
+- **Candidate pair recall:** `[populate from training candidate manifest]`
+- **Common false positives:** `[populate after the full error analysis; inspect legal-suffix
+  and address-number collisions first]`
+- **Common false negatives:** `[populate after the full error analysis; inspect cross-script,
+  missing-address, and low-frequency spelling cases first]`
+
+No full-data score is claimed in this document before a production run. The synthetic
+integration fixture validates execution and file correctness, not challenge accuracy.
 
 ---
 
 ## 6. Conclusion
-*Summarize your approach, key achievements, and lessons learned in 2-3 sentences.*
+The system converts an infeasible all-pairs problem into a bounded candidate search and then
+applies a precision-oriented classifier aligned with the official metric. It preserves
+multilingual evidence, prevents entity leakage, records reproducibility metadata, and uses
+the same code across Kaggle and AWS. Final claims will be based on measured candidate recall,
+validation macro F0.5, untouched holdout macro F0.5, runtime, and leaderboard results.
 
 ---
 
 ## Appendix
 
 ### A. Code Artefacts
-*Your complete, runnable code ships in the submission zip under
-`code/business_entity_resolution/` (all source in `src/`, with a `README.md` and
-`requirements.txt`). Summarise its structure and the entry point(s) to reproduce
-`output/matching_results.tsv` and `output/candidate_pairs.tsv` here.*
+The reusable implementation is under `code/business_entity_resolution/src/ber`. The main
+entry point is `python -m ber.cli run-all`; environment-specific settings are in
+`configs/kaggle_t4x2.yaml` and `configs/aws_g5.yaml`. The portable Kaggle launcher is
+`Experiment_Notebooks/03_Kaggle_End_to_End.ipynb`. AWS CloudFormation, S3 upload, EC2 run
+script, and exact console steps are under `code/business_entity_resolution/infra/aws`.
 
 ### B. Additional Results
-*Include any additional charts, graphs, or detailed results.*
+Attach the final candidate-recall table, threshold-versus-F0.5 curve, per-country error
+breakdown, training history, runtime by stage, and peak resource usage after the production
+run. Keep synthetic-test evidence separate from measured challenge results.
 
 ---
 

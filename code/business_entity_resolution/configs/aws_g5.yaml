@@ -1,0 +1,42 @@
+project:
+  seed: 42
+  time_budget_minutes: 480
+  output_reserve_minutes: 35
+  chunksize: 300000
+  feature_chunk_rows: 600000
+  sample_rows_per_file: null
+
+candidate_generation:
+  name_top_k: 14
+  address_top_k: 12
+  semantic_pairs_per_query: 4
+  max_candidates_per_query: 35
+  max_exact_block_size: 200
+  char_ngram_min: 3
+  char_ngram_max: 5
+  min_name_similarity: 0.16
+  min_address_similarity: 0.14
+  max_tfidf_features: 500000
+
+embeddings:
+  enabled: true
+  model_name: intfloat/multilingual-e5-small
+  model_path: null
+  max_length: 128
+  batch_size_per_gpu: 320
+  cross_script_only: true
+  max_minutes: 75
+
+training:
+  validation_fraction: 0.10
+  holdout_fraction: 0.10
+  tuning_trials: 15
+  tuning_timeout_seconds: 2700
+  tuning_sample_rows: 5000000
+  max_negatives_per_query: 14
+  early_stopping_rounds: 75
+  max_boost_rounds: 1600
+  threshold_min: 0.20
+  threshold_max: 0.98
+  threshold_steps: 79
+  device: cuda

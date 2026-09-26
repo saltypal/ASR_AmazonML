@@ -1,1 +1,2 @@
-# Pinned Dependencies / Environment
+# Install the reproducible production environment.
+-r code/business_entity_resolution/requirements.txt

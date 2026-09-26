@@ -1,5 +1,18 @@
 # ML Challenge 2026 Problem Statement
 
+## Production implementation
+
+The runnable multilingual entity-resolution system, complete methodology, tests, Kaggle
+commands, and AWS instructions are in
+[`code/business_entity_resolution/README.md`](code/business_entity_resolution/README.md).
+The portable Kaggle launcher is
+[`Experiment_Notebooks/03_Kaggle_End_to_End.ipynb`](Experiment_Notebooks/03_Kaggle_End_to_End.ipynb).
+
+The implementation keeps the supplied TSV files as immutable input, streams them into
+temporary Parquet partitions, performs multi-lane candidate generation, tunes an XGBoost
+pair classifier for entity-level macro F0.5, writes both required TSV outputs, and invokes
+the official validator.
+
 ## Business Entity Resolution Challenge
 
 In large-scale commercial platforms, business identity data arrives from multiple independent sources — each contributing partial, noisy fragments of information about the same real-world entities. These fragments share no common identifiers, and the challenge of determining which records refer to the same business is known as Entity Resolution (ER). Your challenge is to build an ML solution that, given business records from 3 independent data sources with noisy and inconsistent fields, determines which records across sources refer to the same real-world business entity.

@@ -1,0 +1,8 @@
+.gitignore
+dataset/
+dataset.zip
+**/__pycache__/
+*.py[cod]
+**/.ipynb_checkpoints/
+code/business_entity_resolution/artifacts/
+aws-results/

@@ -1,0 +1,27 @@
+project:
+  seed: 42
+  time_budget_minutes: 30
+  output_reserve_minutes: 5
+  chunksize: 2000
+  feature_chunk_rows: 5000
+  sample_rows_per_file: 10000
+
+candidate_generation:
+  name_top_k: 5
+  address_top_k: 5
+  semantic_pairs_per_query: 0
+  max_candidates_per_query: 15
+  max_exact_block_size: 30
+  max_tfidf_features: 25000
+
+embeddings:
+  enabled: false
+
+training:
+  tuning_trials: 2
+  tuning_timeout_seconds: 120
+  tuning_sample_rows: 50000
+  max_negatives_per_query: 6
+  max_boost_rounds: 100
+  early_stopping_rounds: 15
+  device: cpu
