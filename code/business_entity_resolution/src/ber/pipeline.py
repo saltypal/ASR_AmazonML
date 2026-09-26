@@ -558,8 +558,13 @@ def run_all(
     )
     metadata = build_run_metadata(repo_root, config)
     write_json(work_root / "run_metadata.json", metadata)
+    stage_started = time.monotonic()
+    print("\n========== STAGE 1/7: PREPROCESS DATA ==========" , flush=True)
     preprocess_stage(data_root, work_root, config)
+    print(f"[stage] Preprocessing finished in {(time.monotonic() - stage_started) / 60:.1f} min", flush=True)
     embedding_minutes_per_split = float(config["embeddings"]["max_minutes"]) / 2.0
+    stage_started = time.monotonic()
+    print("\n========== STAGE 2/7: TRAIN CANDIDATES ==========" , flush=True)
     candidate_stage(
         work_root,
         config,
@@ -567,6 +572,9 @@ def run_all(
         budget,
         embedding_deadline=time.monotonic() + embedding_minutes_per_split * 60.0,
     )
+    print(f"[stage] Train candidates finished in {(time.monotonic() - stage_started) / 60:.1f} min", flush=True)
+    stage_started = time.monotonic()
+    print("\n========== STAGE 3/7: TEST CANDIDATES ==========" , flush=True)
     candidate_stage(
         work_root,
         config,
@@ -574,11 +582,24 @@ def run_all(
         budget,
         embedding_deadline=time.monotonic() + embedding_minutes_per_split * 60.0,
     )
+    print(f"[stage] Test candidates finished in {(time.monotonic() - stage_started) / 60:.1f} min", flush=True)
+    stage_started = time.monotonic()
+    print("\n========== STAGE 4/7: BUILD TRAIN FEATURES ==========" , flush=True)
     feature_stage(data_root, work_root, config, "train")
+    print(f"[stage] Train features finished in {(time.monotonic() - stage_started) / 60:.1f} min", flush=True)
+    stage_started = time.monotonic()
+    print("\n========== STAGE 5/7: BUILD TEST FEATURES ==========" , flush=True)
     feature_stage(data_root, work_root, config, "test")
+    print(f"[stage] Test features finished in {(time.monotonic() - stage_started) / 60:.1f} min", flush=True)
+    stage_started = time.monotonic()
+    print("\n========== STAGE 6/7: TUNE AND TRAIN XGBOOST ==========" , flush=True)
     training = train_stage(data_root, work_root, config)
+    print(f"[stage] Model training finished in {(time.monotonic() - stage_started) / 60:.1f} min", flush=True)
+    stage_started = time.monotonic()
+    print("\n========== STAGE 7/7: INFER, VALIDATE, SAVE ==========" , flush=True)
     inference = inference_stage(work_root, output_root)
     run_official_validator(repo_root, data_root, output_root)
+    print(f"[stage] Inference and validation finished in {(time.monotonic() - stage_started) / 60:.1f} min", flush=True)
     completed = {
         **metadata,
         "elapsed_minutes": budget.elapsed_minutes,

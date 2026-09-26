@@ -170,12 +170,30 @@ def tune_model(
             "params": params,
         }
         trials.append(result)
+        print(
+            f"[tune] trial={trial_number + 1}/{trial_limit} | "
+            f"macro_F0.5={score:.6f} | threshold={threshold:.3f} | "
+            f"best_iteration={int(model.best_iteration):,} | "
+            f"max_depth={params['max_depth']} | eta={params['eta']:.5f} | "
+            f"elapsed={(time.monotonic() - started) / 60:.1f} min",
+            flush=True,
+        )
         if best_result is None or score > best_result["macro_f0_5"]:
             best_model, best_result = model, result
+            print(
+                f"[tune] NEW BEST trial={trial_number + 1} | "
+                f"macro_F0.5={score:.6f}",
+                flush=True,
+            )
     if best_model is None or best_result is None:
         raise RuntimeError("No tuning trial completed inside the configured time budget.")
     search_elapsed = time.monotonic() - started
     final_params = dict(best_result["params"])
+    print(
+        f"[train] Refit XGBoost on the full training partition using the best trial; "
+        f"search_trials_completed={len(trials)}.",
+        flush=True,
+    )
     final_model, history = fit_model(
         train_frame,
         validation_frame,

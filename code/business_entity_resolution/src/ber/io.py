@@ -77,6 +77,12 @@ def preprocess_source(
     chunksize: int,
     nrows: int | None,
 ) -> dict[str, Any]:
+    file_size_gib = path.stat().st_size / (1024**3)
+    print(
+        f"[preprocess] START {path.name} | size={file_size_gib:.2f} GiB | "
+        f"chunk_size={chunksize:,} rows",
+        flush=True,
+    )
     destination.mkdir(parents=True, exist_ok=True)
     row_count = 0
     empty_addresses = 0
@@ -84,7 +90,9 @@ def preprocess_source(
     part_counts: Counter[str] = Counter()
     id_hashes: list[np.ndarray] = []
 
-    for chunk in iter_tsv(path, chunksize=chunksize, nrows=nrows):
+    for chunk_number, chunk in enumerate(
+        iter_tsv(path, chunksize=chunksize, nrows=nrows), start=1
+    ):
         if chunk.columns.tolist() != SOURCE_COLUMNS:
             raise ValueError(f"Unexpected schema while reading {path}: {chunk.columns.tolist()}")
         if not chunk["entity_id"].str.startswith(expected_prefix).all():
@@ -106,6 +114,13 @@ def preprocess_source(
             part_path = destination / f"country={slug}" / f"part-{part_number:05d}.parquet"
             _atomic_parquet(country_frame, part_path)
 
+        if chunk_number == 1 or chunk_number % 5 == 0:
+            print(
+                f"[preprocess] {path.name}: chunk={chunk_number:,} | "
+                f"rows_processed={row_count:,} | countries_seen={len(countries):,}",
+                flush=True,
+            )
+
     if id_hashes:
         all_hashes = np.concatenate(id_hashes)
         if np.unique(all_hashes).size != all_hashes.size:
@@ -121,6 +136,11 @@ def preprocess_source(
         "sample_rows_requested": nrows,
     }
     write_json(destination / "manifest.json", manifest)
+    print(
+        f"[preprocess] DONE  {path.name} | rows={row_count:,} | "
+        f"countries={len(countries):,} | empty_addresses={empty_addresses:,}",
+        flush=True,
+    )
     return manifest
 
 
