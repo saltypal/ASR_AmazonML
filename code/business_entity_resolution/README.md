@@ -199,7 +199,9 @@ Upload and run `Experiment_Notebooks/03_Kaggle_End_to_End.ipynb`:
 
 Large intermediate Parquet and embedding files live in `/kaggle/temp`. Durable outputs live
 in `/kaggle/working`.
-The notebook installs pinned training packages into `/kaggle/temp/ber-venv`; it does not
+The notebook creates `/kaggle/temp/ber-venv` without invoking `ensurepip`. It uses pip in
+the environment when available, or Kaggle's base pip to manage it, and installs pinned
+training packages there; it does not
 replace NumPy or Pandas in the live notebook kernel. If an earlier notebook version already
 changed those packages and `import pandas` fails with `numpy.dtype size changed`, restart the
 Kaggle session once, upload the updated notebook, and run it from the top.

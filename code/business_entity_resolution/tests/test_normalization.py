@@ -31,6 +31,8 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(number_jaccard("14 Main Road 282005", "14 MG Rd 282005"), 1.0)
         self.assertGreater(token_jaccard("Acme Private Limited", "Acme Pvt Ltd"), 0)
         self.assertEqual(remove_legal_suffixes("Acme Private Limited"), "acme")
+        self.assertEqual(remove_legal_suffixes("Trust Bank"), "trust bank")
+        self.assertEqual(remove_legal_suffixes("Foundation Coffee Company"), "foundation coffee")
 
 
 if __name__ == "__main__":

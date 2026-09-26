@@ -66,10 +66,27 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+def _reject_unknown_keys(
+    supplied: dict[str, Any], reference: dict[str, Any], prefix: str = ""
+) -> None:
+    for key, value in supplied.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if key not in reference:
+            raise ValueError(f"Unknown configuration key: {path}")
+        if isinstance(value, dict):
+            expected = reference[key]
+            if not isinstance(expected, dict):
+                raise ValueError(f"Configuration value {path} must not be a mapping.")
+            _reject_unknown_keys(value, expected, path)
+
+
 def load_config(path: str | Path) -> dict[str, Any]:
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as handle:
         supplied = yaml.safe_load(handle) or {}
+    if not isinstance(supplied, dict):
+        raise ValueError("The configuration root must be a mapping.")
+    _reject_unknown_keys(supplied, DEFAULT_CONFIG)
     config = _deep_merge(DEFAULT_CONFIG, supplied)
     validate_config(config)
     config["_config_path"] = str(config_path.resolve())
@@ -86,23 +103,64 @@ def config_hash(config: dict[str, Any]) -> str:
 def validate_config(config: dict[str, Any]) -> None:
     project = config["project"]
     candidates = config["candidate_generation"]
+    embeddings = config["embeddings"]
     training = config["training"]
+    if project["time_budget_minutes"] <= 0:
+        raise ValueError("time_budget_minutes must be positive.")
+    if project["output_reserve_minutes"] < 0:
+        raise ValueError("output_reserve_minutes cannot be negative.")
     if project["time_budget_minutes"] <= project["output_reserve_minutes"]:
         raise ValueError("The total runtime must exceed the reserved output time.")
     if project["chunksize"] <= 0:
         raise ValueError("chunksize must be positive.")
     if project["feature_chunk_rows"] <= 0:
         raise ValueError("feature_chunk_rows must be positive.")
+    sample_rows = project.get("sample_rows_per_file")
+    if sample_rows is not None and sample_rows <= 0:
+        raise ValueError("sample_rows_per_file must be null or positive.")
     if not 1 <= candidates["max_candidates_per_query"] <= 500:
         raise ValueError("max_candidates_per_query must be between 1 and 500.")
+    if candidates["name_top_k"] < 0 or candidates["address_top_k"] < 0:
+        raise ValueError("Sparse candidate top-K values cannot be negative.")
     if candidates["name_top_k"] + candidates["address_top_k"] <= 0:
         raise ValueError("At least one sparse candidate lane must be enabled.")
     if candidates["semantic_pairs_per_query"] < 0:
         raise ValueError("semantic_pairs_per_query cannot be negative.")
+    if candidates["max_exact_block_size"] <= 0:
+        raise ValueError("max_exact_block_size must be positive.")
+    if not 1 <= candidates["char_ngram_min"] <= candidates["char_ngram_max"]:
+        raise ValueError("Character n-gram bounds must satisfy 1 <= min <= max.")
+    for key in ("min_name_similarity", "min_address_similarity"):
+        if not 0 <= candidates[key] <= 1:
+            raise ValueError(f"{key} must be between 0 and 1.")
+    if candidates["max_tfidf_features"] <= 0:
+        raise ValueError("max_tfidf_features must be positive.")
+    for key in ("max_length", "batch_size_per_gpu", "max_minutes"):
+        if embeddings[key] <= 0:
+            raise ValueError(f"embeddings.{key} must be positive.")
+    if not 0 < training["validation_fraction"] < 0.5:
+        raise ValueError("validation_fraction must be between 0 and 0.5.")
+    if not 0 <= training["holdout_fraction"] < 0.5:
+        raise ValueError("holdout_fraction must be between 0 and 0.5.")
     validation_total = training["validation_fraction"] + training["holdout_fraction"]
     if not 0 < validation_total < 0.5:
         raise ValueError("Validation plus holdout fractions must be between 0 and 0.5.")
+    if training["tuning_trials"] <= 0:
+        raise ValueError("tuning_trials must be positive.")
+    if training["tuning_timeout_seconds"] <= 0:
+        raise ValueError("tuning_timeout_seconds must be positive.")
     if training["tuning_timeout_seconds"] > project["time_budget_minutes"] * 60:
         raise ValueError("Tuning timeout exceeds the complete run budget.")
+    if training["tuning_sample_rows"] <= 0:
+        raise ValueError("tuning_sample_rows must be positive.")
     if training["max_negatives_per_query"] < 1:
         raise ValueError("max_negatives_per_query must be positive.")
+    if training["max_boost_rounds"] <= 0 or training["early_stopping_rounds"] <= 0:
+        raise ValueError("Boosting and early-stopping rounds must be positive.")
+    if not 0 <= training["threshold_min"] <= training["threshold_max"] <= 1:
+        raise ValueError("Threshold bounds must satisfy 0 <= min <= max <= 1.")
+    if training["threshold_steps"] < 2:
+        raise ValueError("threshold_steps must be at least 2.")
+    device = str(training["device"])
+    if device != "cpu" and not device.startswith("cuda"):
+        raise ValueError("training.device must be 'cpu' or a CUDA device string.")

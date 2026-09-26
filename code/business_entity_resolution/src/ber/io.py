@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
 from pathlib import Path
@@ -191,6 +190,35 @@ def load_ground_truth(path: Path, nrows: int | None = None) -> pd.DataFrame:
     )
     if truth.columns.tolist() != GROUND_TRUTH_COLUMNS:
         raise ValueError(f"Unexpected ground-truth schema: {truth.columns.tolist()}")
+    truth["source1_entity_id"] = truth["source1_entity_id"].str.strip()
+    if truth["source1_entity_id"].eq("").any():
+        raise ValueError("Ground truth contains an empty source1_entity_id.")
+    if not truth["source1_entity_id"].str.startswith("S1-").all():
+        bad = truth.loc[
+            ~truth["source1_entity_id"].str.startswith("S1-"), "source1_entity_id"
+        ].head().tolist()
+        raise ValueError(f"Ground truth contains invalid Source-1 IDs: {bad}")
+    if truth["source1_entity_id"].duplicated().any():
+        duplicates = truth.loc[
+            truth["source1_entity_id"].duplicated(keep=False), "source1_entity_id"
+        ].drop_duplicates().head().tolist()
+        raise ValueError(f"Ground truth contains duplicate Source-1 rows: {duplicates}")
+
+    normalized_matches: list[str] = []
+    for row in truth.itertuples(index=False):
+        matches = [value.strip() for value in row.matched_entity_ids.split(",") if value.strip()]
+        if len(matches) != len(set(matches)):
+            raise ValueError(
+                f"Ground truth contains duplicate matches for {row.source1_entity_id}."
+            )
+        invalid = [value for value in matches if not value.startswith(("S2-", "S3-"))]
+        if invalid:
+            raise ValueError(
+                f"Ground truth contains invalid target IDs for {row.source1_entity_id}: "
+                f"{invalid[:5]}"
+            )
+        normalized_matches.append(",".join(matches))
+    truth["matched_entity_ids"] = normalized_matches
     return truth
 
 

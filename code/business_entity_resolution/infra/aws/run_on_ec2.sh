@@ -9,21 +9,29 @@ BER_RUN_ID="${BER_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BER_ROOT="${BER_ROOT:-/opt/amazonml}"
 MODEL_REVISION="fd1525a9fd15316a2d503bf26ab031a61d056e98"
 
+BER_ROOT="$(realpath -m "$BER_ROOT")"
+case "$BER_ROOT" in
+  /|/opt|/home|/root|/tmp)
+    printf 'Refusing unsafe BER_ROOT: %s\n' "$BER_ROOT" >&2
+    exit 2
+    ;;
+esac
+
 sudo mkdir -p "$BER_ROOT"
 sudo chown "$(id -u):$(id -g)" "$BER_ROOT"
 cd "$BER_ROOT"
 
-rm -rf source
+rm -rf "$BER_ROOT/source" "$BER_ROOT/.venv"
 git clone --filter=blob:none "$BER_REPO_URL" source
 git -C source checkout "$BER_GIT_REF"
 GIT_COMMIT="$(git -C source rev-parse HEAD)"
 
-python3 -m venv .venv
+python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e source/code/business_entity_resolution
 
-rm -rf dataset work output model-cache
+rm -rf "$BER_ROOT/dataset" "$BER_ROOT/work" "$BER_ROOT/output" "$BER_ROOT/model-cache"
 mkdir -p dataset work output model-cache
 aws s3 sync "s3://${BER_BUCKET}/dataset/" dataset/ --region "$BER_REGION" --only-show-errors
 
@@ -48,6 +56,7 @@ PY
 export PYTHONPATH="$BER_ROOT/source/code/business_entity_resolution/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 nvidia-smi
+python -c 'import torch; assert torch.cuda.is_available(), "PyTorch cannot see CUDA"; print(torch.__version__, torch.cuda.get_device_name(0))'
 
 set +e
 python -m ber.cli run-all \

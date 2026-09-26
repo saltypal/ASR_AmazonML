@@ -3,6 +3,7 @@ dataset/
 dataset.zip
 **/__pycache__/
 *.py[cod]
+*.egg-info/
 **/.ipynb_checkpoints/
 code/business_entity_resolution/artifacts/
 aws-results/

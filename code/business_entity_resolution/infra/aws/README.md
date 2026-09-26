@@ -78,6 +78,10 @@ curl -fsSL https://raw.githubusercontent.com/saltypal/ASR_AmazonML/main/code/bus
 bash run_on_ec2.sh
 ```
 
+Run the script from the AMI's PyTorch environment. It creates a clean virtual environment
+with access to the CUDA-enabled PyTorch supplied by the AMI, then verifies that PyTorch can
+see a GPU before downloading the model or starting the pipeline.
+
 For an auditable final run, replace `main` with the exact tested Git commit. The script
 downloads the dataset from S3, pins the E5 model revision, runs all stages, invokes the
 official validator, and uploads outputs, model metadata, run metadata, and logs to:

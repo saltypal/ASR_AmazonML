@@ -22,7 +22,7 @@ from .io import (
     preprocess_dataset,
 )
 from .metrics import macro_fbeta, predictions_at_threshold
-from .model import BASE_PARAMS, load_model_bundle, save_model_bundle, score_frame, tune_model
+from .model import load_model_bundle, save_model_bundle, score_frame, tune_model
 from .runtime import RuntimeBudget, build_run_metadata, write_json
 from .splitting import assign_group_splits
 from .submission import (
@@ -119,6 +119,7 @@ def _semantic_rerank_lane(
         candidates["entity_id"].isin(set(eligible["candidate_entity_id"]))
     ]
     country_root = transient_root / split / country_slug / target_source
+    _reset_child(country_root, transient_root)
     input_root = country_root / "input"
     query_input = input_root / "source1"
     candidate_input = input_root / target_source
@@ -431,9 +432,6 @@ def train_stage(data_root: Path, work_root: Path, config: dict[str, Any]) -> dic
         print("[train] CUDA requested but unavailable; falling back to CPU for this run.")
         requested_device = "cpu"
     training_config["device"] = requested_device
-    for parameter_set in (BASE_PARAMS,):
-        parameter_set["device"] = requested_device
-        parameter_set["seed"] = int(config["project"]["seed"])
     print(
         f"[train] Tuning on {len(partitions['train']):,} train and "
         f"{len(partitions['validation']):,} validation candidate pairs ({requested_device})."

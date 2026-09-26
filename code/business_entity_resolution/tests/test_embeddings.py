@@ -54,9 +54,12 @@ class EmbeddingCandidateTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as directory, patch(
             "ber.pipeline._gpu_count", return_value=2
-        ), patch("ber.pipeline.launch_parallel_encoding"), patch(
+        ), patch("ber.pipeline.launch_parallel_encoding") as launch, patch(
             "ber.pipeline.load_embeddings", side_effect=embedding_parts
         ):
+            stale_root = Path(directory) / "train" / "india" / "source2" / "output"
+            stale_root.mkdir(parents=True)
+            (stale_root / "_SUCCESS.rank-00").write_text("stale", encoding="utf-8")
             lane = _semantic_rerank_lane(
                 queries,
                 candidates,
@@ -68,6 +71,8 @@ class EmbeddingCandidateTests(unittest.TestCase):
                 config,
                 timeout_seconds=10,
             )
+            self.assertEqual(launch.call_count, 2)
+            self.assertFalse((stale_root / "_SUCCESS.rank-00").exists())
         self.assertEqual(lane["source1_entity_id"].tolist(), ["S1-1"])
         self.assertAlmostEqual(float(lane["dense_score"].iloc[0]), 0.8, places=5)
 

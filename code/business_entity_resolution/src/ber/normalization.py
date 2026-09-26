@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import unicodedata
 from functools import lru_cache
-from typing import Iterable
 
 import pandas as pd
 
@@ -52,7 +51,10 @@ def tokenize(value: object) -> tuple[str, ...]:
 
 
 def remove_legal_suffixes(value: object) -> str:
-    return " ".join(token for token in tokenize(value) if token not in LEGAL_SUFFIXES)
+    tokens = list(tokenize(value))
+    while tokens and tokens[-1] in LEGAL_SUFFIXES:
+        tokens.pop()
+    return " ".join(tokens)
 
 
 def extract_numbers(value: object) -> tuple[str, ...]:
