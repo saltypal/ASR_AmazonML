@@ -192,12 +192,17 @@ Upload and run `Experiment_Notebooks/03_Kaggle_End_to_End.ipynb`:
 2. Select **GPU T4 x2**.
 3. Turn Internet on for the initial dependency and pinned E5 download. For an offline final
    run, attach the pinned E5 snapshot as a private Kaggle Dataset.
-4. Set `TEAM_NAME`, `GIT_REF`, and optionally `BER_E5_MODEL_PATH` in the run-control cells.
+4. Set `BER_TEAM_NAME`, optionally `BER_GIT_BRANCH`, and optionally `BER_E5_MODEL_PATH`
+   before the run-control cell. The default branch is `main`.
 5. Run all cells and save a version so `/kaggle/working` persists.
 6. Download both TSVs, run evidence, and the submission zip.
 
 Large intermediate Parquet and embedding files live in `/kaggle/temp`. Durable outputs live
 in `/kaggle/working`.
+The notebook installs pinned training packages into `/kaggle/temp/ber-venv`; it does not
+replace NumPy or Pandas in the live notebook kernel. If an earlier notebook version already
+changed those packages and `import pandas` fails with `numpy.dtype size changed`, restart the
+Kaggle session once, upload the updated notebook, and run it from the top.
 
 ## Direct CLI
 
