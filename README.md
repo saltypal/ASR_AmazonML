@@ -7,6 +7,9 @@ commands, and AWS instructions are in
 [`code/business_entity_resolution/README.md`](code/business_entity_resolution/README.md).
 The portable Kaggle launcher is
 [`Experiment_Notebooks/03_Kaggle_End_to_End.ipynb`](Experiment_Notebooks/03_Kaggle_End_to_End.ipynb).
+For the full first-principles explanation, efficiency analysis, Sentence Transformer decision,
+stage contracts, and Kaggle/AWS experiment plan, read
+[`PROJECT_EXPLANATION.md`](PROJECT_EXPLANATION.md).
 
 The implementation keeps the supplied TSV files as immutable input, streams them into
 temporary Parquet partitions, performs multi-lane candidate generation, tunes an XGBoost
