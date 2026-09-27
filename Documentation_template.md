@@ -8,8 +8,8 @@
 
 ## 1. Executive Summary
 We use a high-recall blocking and supervised pair-classification pipeline for multilingual
-business entity resolution. Unicode-safe comparison views, exact/numeric blocks, character
-TF-IDF retrieval, and selective MIT-licensed multilingual E5 reranking produce candidates;
+business entity resolution. Unicode-safe comparison views, exact/numeric blocks, and hashed
+token TF-IDF retrieval produce candidates;
 XGBoost scores stable pair features and a validation-set threshold directly optimizes macro
 F0.5. The pipeline is reproducible on Kaggle T4 x2 and AWS EC2 G5 and writes both required
 TSV files through the official validator.
@@ -37,8 +37,8 @@ proper nouns and address evidence.
 1. Validate TSV schemas and IDs while streaming bounded chunks.
 2. Create NFKC, case-folded, punctuation, legal-suffix, number, postal, and script views.
 3. Partition normalized records by country in compressed Parquet.
-4. Generate candidates from exact blocks and character TF-IDF name/address retrieval, then
-   optionally add E5 cosine evidence to bounded cross-script pairs.
+4. Generate candidates from exact blocks and hashed TF-IDF over multilingual name tokens,
+   address words, and address numbers.
 5. Cap candidates per S1 entity and measure candidate recall on train.
 6. Compute stable string, token, numeric, script, source, missingness, and retrieval-rank
    features; retain all positives and the hardest negatives.
@@ -49,16 +49,15 @@ proper nouns and address evidence.
    and run the challenge validator.
 
 **Approach Type:** Hybrid multi-lane blocking plus supervised pair classifier
-**Core Innovation:** A Unicode-preserving retrieval cascade with corpus-stable pair features,
-entity-level validation, and runtime-bounded dual-GPU multilingual rescue.
+**Core Innovation:** A Unicode-preserving, bounded retrieval cascade with corpus-stable pair
+features and entity-level validation under a three-hour runtime target.
 
 ---
 
 ## 3. Candidate Generation (Blocking)
 
 - **Blocking keys used:** normalized name, normalized address, legal-suffix-stripped name,
-  address-number signature, and character 3–5 gram TF-IDF for names and addresses.
-  Multilingual E5 cosine reranks up to a configured number of cross-script pairs per query.
+  address-number signature, and hashed token TF-IDF over names, addresses, and numbers.
 - **Candidate pairs generated:** `[populate from work/candidates/*/manifest.json after the
   final run]`.
 - **How true matches are protected:** candidates are the union of independent lanes before a
@@ -75,7 +74,7 @@ entity-level validation, and runtime-bounded dual-GPU multilingual rescue.
   Jaccard, length ratio, script equality, and cross-script indicator.
 - Address features: normalized exactness, RapidFuzz ratios, token and number Jaccard, postal
   equality, length ratio, and missingness.
-- Other: retrieval-lane presence, within-query retrieval rank, E5 cosine, exact block
+- Other: retrieval-lane presence, within-query retrieval rank, exact block
   signals, country equality, and target source.
 
 **Model type:** XGBoost binary classifier with GPU histogram training
@@ -115,7 +114,7 @@ validation macro F0.5, untouched holdout macro F0.5, runtime, and leaderboard re
 The reusable implementation is under `code/business_entity_resolution/src/ber`. The main
 entry point is `python -m ber.cli run-all`; environment-specific settings are in
 `configs/kaggle_t4x2.yaml` and `configs/aws_g5.yaml`. The portable Kaggle launcher is
-`Experiment_Notebooks/03_Kaggle_End_to_End.ipynb`. AWS CloudFormation, S3 upload, EC2 run
+`Experiment_Notebooks/04_Kaggle_Three_Hour_Run.ipynb`. AWS CloudFormation, S3 upload, EC2 run
 script, and exact console steps are under `code/business_entity_resolution/infra/aws`.
 
 ### B. Additional Results

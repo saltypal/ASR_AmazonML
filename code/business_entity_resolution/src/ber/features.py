@@ -5,12 +5,13 @@ import pandas as pd
 from rapidfuzz import fuzz
 
 from .candidates import SIGNAL_COLUMNS
-from .normalization import number_jaccard, token_jaccard
+from .normalization import TOKEN_PATTERN
 
 
 FEATURE_COLUMNS = [
     "name_retrieval_lane",
     "address_retrieval_lane",
+    "token_retrieval_lane",
     "dense_retrieval_lane",
     "retrieval_rank_score",
     "dense_score",
@@ -46,6 +47,26 @@ def _ratio(left: str, right: str) -> float:
 
 def _token_set_ratio(left: str, right: str) -> float:
     return fuzz.token_set_ratio(left, right, score_cutoff=0) / 100.0
+
+
+def _normalized_token_jaccard(left: str, right: str) -> float:
+    """The inputs are already Unicode and punctuation normalized at ingest."""
+    left_tokens = set(TOKEN_PATTERN.findall(left))
+    right_tokens = set(TOKEN_PATTERN.findall(right))
+    if not left_tokens and not right_tokens:
+        return 1.0
+    union = left_tokens | right_tokens
+    return len(left_tokens & right_tokens) / len(union) if union else 0.0
+
+
+def _number_signature_jaccard(left: str, right: str) -> float:
+    """Compare the stored number signatures without re-normalizing addresses."""
+    left_numbers = set(filter(None, left.split("|")))
+    right_numbers = set(filter(None, right.split("|")))
+    if not left_numbers and not right_numbers:
+        return 0.0
+    union = left_numbers | right_numbers
+    return len(left_numbers & right_numbers) / len(union) if union else 0.0
 
 
 def _length_ratio(left: pd.Series, right: pd.Series) -> np.ndarray:
@@ -85,6 +106,7 @@ def build_pair_features(
         merged[column] = merged[column].fillna(0).astype(np.float32)
     merged["name_retrieval_lane"] = merged["name_tfidf"].gt(0).astype(np.float32)
     merged["address_retrieval_lane"] = merged["address_tfidf"].gt(0).astype(np.float32)
+    merged["token_retrieval_lane"] = merged["token_tfidf"].gt(0).astype(np.float32)
     merged["dense_retrieval_lane"] = merged["dense_score"].gt(0).astype(np.float32)
     retrieval_rank = merged.groupby("source1_entity_id")["retrieval_score"].rank(
         method="first", ascending=False
@@ -108,13 +130,14 @@ def build_pair_features(
         (_token_set_ratio(a, b) for a, b in zip(q_address, c_address)), dtype=np.float32
     )
     merged["name_jaccard"] = np.fromiter(
-        (token_jaccard(a, b) for a, b in zip(q_name, c_name)), dtype=np.float32
+        (_normalized_token_jaccard(a, b) for a, b in zip(q_name, c_name)), dtype=np.float32
     )
     merged["address_jaccard"] = np.fromiter(
-        (token_jaccard(a, b) for a, b in zip(q_address, c_address)), dtype=np.float32
+        (_normalized_token_jaccard(a, b) for a, b in zip(q_address, c_address)), dtype=np.float32
     )
     merged["number_jaccard"] = np.fromiter(
-        (number_jaccard(a, b) for a, b in zip(q_address, c_address)), dtype=np.float32
+        (_number_signature_jaccard(a, b) for a, b in zip(merged["q_address_numbers"], merged["c_address_numbers"])),
+        dtype=np.float32,
     )
     merged["postal_exact"] = (
         merged["q_postal_token"].ne("") & merged["q_postal_token"].eq(merged["c_postal_token"])

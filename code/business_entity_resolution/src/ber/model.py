@@ -69,7 +69,7 @@ def fit_model(
         evals_result=evaluations,
         early_stopping_rounds=early_stopping_rounds,
         callbacks=callbacks,
-        verbose_eval=False,
+        verbose_eval=50,
     )
     return model, evaluations
 

@@ -199,23 +199,41 @@ def candidate_stage(
     )
     if embedding_deadline is None:
         embedding_deadline = time.monotonic() + float(embedding_config["max_minutes"]) * 60.0
-    truth = None
+    truth_frame = None
     if split == "train":
         nrows = config["project"].get("sample_rows_per_file")
-        truth = ground_truth_sets(
-            load_ground_truth(dataset_files(Path(config["_data_root"]), "train")["ground_truth"], nrows)
+        truth_frame = load_ground_truth(
+            dataset_files(Path(config["_data_root"]), "train")["ground_truth"], nrows
         )
     diagnostics: list[dict[str, Any]] = []
+    required_deadline = (
+        budget.started_at
+        + (budget.total_minutes - budget.reserve_minutes) * 60.0
+    )
 
     for country_slug in available_country_slugs(preprocessed_root, split):
         budget.require(config["project"]["output_reserve_minutes"], f"{split} candidates")
         queries = load_country_partition(preprocessed_root, split, "source1", country_slug)
+        if split == "train" and config["project"].get("train_queries_per_country") is not None:
+            limit = int(config["project"]["train_queries_per_country"])
+            queries = queries.sample(
+                n=min(limit, len(queries)), random_state=int(config["project"]["seed"])
+            ).sort_index().reset_index(drop=True)
+            print(
+                f"[candidates] {split}/{country_slug}: sampled {len(queries):,} "
+                "Source-1 entities for supervised training",
+                flush=True,
+            )
+        _atomic_parquet(
+            queries[["entity_id"]], destination / f"query-ids-{country_slug}.parquet"
+        )
         country_lanes: list[pd.DataFrame] = []
         target_frames: dict[str, pd.DataFrame] = {}
         classical_by_target: dict[str, pd.DataFrame] = {}
         for target_source, target_label in (("source2", "S2"), ("source3", "S3")):
             candidates = load_country_partition(preprocessed_root, split, target_source, country_slug)
-            target_frames[target_source] = candidates
+            if dense_enabled:
+                target_frames[target_source] = candidates
             if candidates.empty:
                 continue
             print(
@@ -223,10 +241,21 @@ def candidate_stage(
                 f"{len(queries):,} queries x {len(candidates):,} records"
             )
             classical = generate_candidates_for_source(
-                queries, candidates, target_label, candidate_config
+                queries,
+                candidates,
+                target_label,
+                candidate_config,
+                deadline=required_deadline,
             )
-            classical_by_target[target_source] = classical
+            if dense_enabled:
+                classical_by_target[target_source] = classical
             country_lanes.append(classical)
+            print(
+                f"[candidates] {split}/{country_slug}/{target_label}: "
+                f"retrieval complete | pairs={len(classical):,} | "
+                f"budget_remaining_minutes={budget.remaining_minutes:.1f}",
+                flush=True,
+            )
 
         use_dense_here = dense_enabled and time.monotonic() < embedding_deadline
         if use_dense_here:
@@ -272,13 +301,17 @@ def candidate_stage(
             "queries": len(queries),
             "candidate_pairs": len(pairs),
         }
-        if truth is not None:
-            country_truth = {source1_id: truth.get(source1_id, set()) for source1_id in queries["entity_id"]}
+        if truth_frame is not None:
+            country_query_ids = set(queries["entity_id"])
+            country_truth = ground_truth_sets(
+                truth_frame[truth_frame["source1_entity_id"].isin(country_query_ids)]
+            )
             diagnostic.update(candidate_recall(pairs, country_truth))
         diagnostics.append(diagnostic)
         transient_country = transient_root / split / country_slug
         if transient_country.exists():
             shutil.rmtree(transient_country)
+        del queries, country_lanes, target_frames, classical_by_target, candidates
     summary = {"split": split, "countries": diagnostics}
     write_json(destination / "manifest.json", summary)
     return summary
@@ -325,12 +358,21 @@ def feature_stage(
     truth: dict[str, set[str]] | None = None
     if split == "train":
         nrows = config["project"].get("sample_rows_per_file")
-        truth = ground_truth_sets(load_ground_truth(dataset_files(data_root, "train")["ground_truth"], nrows))
+        truth_frame = load_ground_truth(dataset_files(data_root, "train")["ground_truth"], nrows)
+        query_id_paths = sorted(candidate_root.glob("query-ids-*.parquet"))
+        if query_id_paths:
+            selected_ids = set().union(
+                *(set(pd.read_parquet(path)["entity_id"]) for path in query_id_paths)
+            )
+            truth_frame = truth_frame[truth_frame["source1_entity_id"].isin(selected_ids)]
+        truth = ground_truth_sets(truth_frame)
     summaries = []
     for pair_path in sorted(candidate_root.glob("country=*.parquet")):
         country_slug = pair_path.stem.split("=", 1)[1]
         pairs = pd.read_parquet(pair_path)
         queries = load_country_partition(preprocessed_root, split, "source1", country_slug)
+        if split == "train" and config["project"].get("train_queries_per_country") is not None:
+            queries = queries[queries["entity_id"].isin(set(pairs["source1_entity_id"]))]
         target_frames = {
             "S2": load_country_partition(preprocessed_root, split, "source2", country_slug),
             "S3": load_country_partition(preprocessed_root, split, "source3", country_slug),
@@ -376,6 +418,11 @@ def feature_stage(
             total_positives += int(features["label"].sum()) if "label" in features else 0
             _atomic_parquet(
                 features, country_destination / f"part-{part_number:05d}.parquet"
+            )
+            print(
+                f"[features] {split}/{country_slug}: part={part_number + 1} | "
+                f"rows={len(features):,} | cumulative_rows={total_rows:,}",
+                flush=True,
             )
         summaries.append(
             {
@@ -425,6 +472,16 @@ def train_stage(data_root: Path, work_root: Path, config: dict[str, Any]) -> dic
         dataset_files(data_root, "train")["ground_truth"],
         config["project"].get("sample_rows_per_file"),
     )
+    query_id_paths = sorted((work_root / "candidates" / "train").glob("query-ids-*.parquet"))
+    if query_id_paths:
+        trained_query_ids = set().union(
+            *(set(pd.read_parquet(path)["entity_id"]) for path in query_id_paths)
+        )
+        truth_frame = truth_frame[truth_frame["source1_entity_id"].isin(trained_query_ids)]
+        print(
+            f"[train] Ground truth restricted to {len(truth_frame):,} retrieved training entities.",
+            flush=True,
+        )
     truths = _truth_by_split(ground_truth_sets(truth_frame), config)
     training_config = dict(config["training"])
     requested_device = str(training_config["device"])
@@ -480,7 +537,9 @@ def inference_stage(work_root: Path, output_root: Path) -> dict[str, Any]:
         selected_parts = []
         scored_rows = selected_rows = 0
         minimum_score = maximum_score = None
-        for feature_path in sorted(country_directory.glob("part-*.parquet")):
+        for part_number, feature_path in enumerate(
+            sorted(country_directory.glob("part-*.parquet")), start=1
+        ):
             features = pd.read_parquet(feature_path)
             if features.empty:
                 continue
@@ -494,6 +553,11 @@ def inference_stage(work_root: Path, output_root: Path) -> dict[str, Any]:
             selected_rows += len(selected_part)
             if not selected_part.empty:
                 selected_parts.append(selected_part)
+            print(
+                f"[infer] {country_slug}: part={part_number} | "
+                f"scored={scored_rows:,} | selected={selected_rows:,}",
+                flush=True,
+            )
         scored = (
             pd.concat(selected_parts, ignore_index=True)
             if selected_parts

@@ -17,8 +17,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "chunksize": 250_000,
         "feature_chunk_rows": 400_000,
         "sample_rows_per_file": None,
+        "train_queries_per_country": None,
     },
     "candidate_generation": {
+        "method": "char_tfidf",
+        "token_top_k": 12,
+        "token_min_similarity": 0.01,
+        "token_hash_features": 4_194_304,
+        "token_query_chunk_size": 10_000,
+        "token_threads": 4,
         "name_top_k": 12,
         "address_top_k": 10,
         "semantic_pairs_per_query": 3,
@@ -29,6 +36,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "min_name_similarity": 0.18,
         "min_address_similarity": 0.16,
         "max_tfidf_features": 400_000,
+        "tfidf_query_chunk_size": 2_000,
+        "max_tfidf_document_frequency": 5_000,
     },
     "embeddings": {
         "enabled": True,
@@ -118,6 +127,16 @@ def validate_config(config: dict[str, Any]) -> None:
     sample_rows = project.get("sample_rows_per_file")
     if sample_rows is not None and sample_rows <= 0:
         raise ValueError("sample_rows_per_file must be null or positive.")
+    train_queries = project.get("train_queries_per_country")
+    if train_queries is not None and train_queries <= 0:
+        raise ValueError("train_queries_per_country must be null or positive.")
+    if candidates["method"] not in {"char_tfidf", "token_hash"}:
+        raise ValueError("candidate_generation.method must be char_tfidf or token_hash.")
+    for key in ("token_top_k", "token_hash_features", "token_query_chunk_size", "token_threads"):
+        if candidates[key] <= 0:
+            raise ValueError(f"candidate_generation.{key} must be positive.")
+    if not 0 <= candidates["token_min_similarity"] <= 1:
+        raise ValueError("token_min_similarity must be between 0 and 1.")
     if not 1 <= candidates["max_candidates_per_query"] <= 500:
         raise ValueError("max_candidates_per_query must be between 1 and 500.")
     if candidates["name_top_k"] < 0 or candidates["address_top_k"] < 0:
@@ -135,6 +154,10 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ValueError(f"{key} must be between 0 and 1.")
     if candidates["max_tfidf_features"] <= 0:
         raise ValueError("max_tfidf_features must be positive.")
+    if candidates["tfidf_query_chunk_size"] <= 0:
+        raise ValueError("tfidf_query_chunk_size must be positive.")
+    if candidates["max_tfidf_document_frequency"] <= 0:
+        raise ValueError("max_tfidf_document_frequency must be positive.")
     for key in ("max_length", "batch_size_per_gpu", "max_minutes"):
         if embeddings[key] <= 0:
             raise ValueError(f"embeddings.{key} must be positive.")

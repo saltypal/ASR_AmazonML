@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import time
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import HashingVectorizer, TfidfTransformer, TfidfVectorizer
 
 
 SIGNAL_COLUMNS = [
     "name_tfidf",
     "address_tfidf",
+    "token_tfidf",
     "dense_score",
     "exact_name",
     "exact_address",
@@ -58,6 +60,9 @@ def exact_block(
     allowed = frequencies[frequencies <= max_block_size].index
     right = right[right[key].isin(allowed)]
     left = queries.loc[queries[key].ne(""), ["entity_id", key]]
+    # Repeated values on either side can create a huge many-to-many join.
+    left_frequencies = left[key].value_counts()
+    left = left[left[key].isin(left_frequencies[left_frequencies <= max_block_size].index)]
     joined = left.merge(right, on=key, how="inner", suffixes=("_left", "_right"), sort=False)
     if joined.empty:
         return _empty_candidates()
@@ -134,9 +139,14 @@ def tfidf_block(
     min_similarity: float,
     ngram_range: tuple[int, int],
     max_features: int,
+    query_chunk_size: int = 2_000,
+    deadline: float | None = None,
+    max_document_frequency: int = 5_000,
 ) -> pd.DataFrame:
     if top_k <= 0 or queries.empty or candidates.empty:
         return _empty_candidates()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError(f"Candidate retrieval deadline reached before {target_source}/{signal}.")
     query_text = queries[text_column].fillna("").astype(str)
     candidate_text = candidates[text_column].fillna("").astype(str)
     nonempty_query = query_text.ne("")
@@ -146,37 +156,192 @@ def tfidf_block(
 
     query_subset = query_text[nonempty_query]
     candidate_subset = candidate_text[nonempty_candidate]
+    started = time.monotonic()
     vectorizer = TfidfVectorizer(
         analyzer="char_wb",
         ngram_range=ngram_range,
         dtype=np.float32,
-        min_df=2,
+        min_df=1,
+        max_df=(
+            max_document_frequency
+            if len(candidate_subset) > max_document_frequency
+            else 1.0
+        ),
         max_features=max_features,
         sublinear_tf=True,
         norm="l2",
     )
-    combined = pd.concat([query_subset, candidate_subset], ignore_index=True)
-    try:
-        vectorizer.fit(combined)
-    except ValueError:
-        return _empty_candidates()
-    left = vectorizer.transform(query_subset).tocsr()
-    right = vectorizer.transform(candidate_subset).tocsr()
-    similarities = sparse_topn(left, right, top_k=top_k, threshold=min_similarity)
-
-    row_counts = np.diff(similarities.indptr)
-    if row_counts.sum() == 0:
-        return _empty_candidates()
-    row_positions = np.repeat(np.arange(similarities.shape[0]), row_counts)
-    query_ids = queries.loc[nonempty_query, "entity_id"].to_numpy()[row_positions]
-    candidate_ids = candidates.loc[nonempty_candidate, "entity_id"].to_numpy()[similarities.indices]
-    return _lane_frame(
-        query_ids,
-        candidate_ids,
-        target_source,
-        signal,
-        similarities.data.astype(np.float32),
+    print(
+        f"[candidates] {target_source}/{signal}: fitting TF-IDF and building index from "
+        f"{len(candidate_subset):,} candidate texts (max_df={vectorizer.max_df})",
+        flush=True,
     )
+    try:
+        right = vectorizer.fit_transform(candidate_subset).tocsr()
+    except ValueError as exc:
+        if "empty vocabulary" in str(exc) or "After pruning" in str(exc):
+            print(f"[candidates] {target_source}/{signal}: no usable n-grams", flush=True)
+            return _empty_candidates()
+        raise
+    print(
+        f"[candidates] {target_source}/{signal}: index ready | "
+        f"features={len(vectorizer.vocabulary_):,} | nnz={right.nnz:,} | "
+        f"elapsed={(time.monotonic() - started) / 60:.1f} min",
+        flush=True,
+    )
+    query_ids_all = queries.loc[nonempty_query, "entity_id"].to_numpy()
+    candidate_ids_all = candidates.loc[nonempty_candidate, "entity_id"].to_numpy()
+    blocks: list[pd.DataFrame] = []
+    total_queries = len(query_subset)
+    total_chunks = (total_queries + query_chunk_size - 1) // query_chunk_size
+    for chunk_number, start in enumerate(range(0, total_queries, query_chunk_size), start=1):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"Candidate retrieval deadline reached during {target_source}/{signal}."
+            )
+        end = min(start + query_chunk_size, total_queries)
+        chunk_started = time.monotonic()
+        print(
+            f"[candidates] {target_source}/{signal}: transforming and searching chunk "
+            f"{chunk_number}/{total_chunks} ({start:,}:{end:,} queries)",
+            flush=True,
+        )
+        left = vectorizer.transform(query_subset.iloc[start:end]).tocsr()
+        similarities = sparse_topn(
+            left, right, top_k=top_k, threshold=min_similarity
+        )
+        row_counts = np.diff(similarities.indptr)
+        if row_counts.sum():
+            row_positions = np.repeat(np.arange(end - start), row_counts)
+            blocks.append(
+                _lane_frame(
+                    query_ids_all[start:end][row_positions],
+                    candidate_ids_all[similarities.indices],
+                    target_source,
+                    signal,
+                    similarities.data.astype(np.float32),
+                )
+            )
+        print(
+            f"[candidates] {target_source}/{signal}: chunk {chunk_number}/{total_chunks} "
+            f"complete | pairs={similarities.nnz:,} | "
+            f"chunk_seconds={time.monotonic() - chunk_started:.1f} | "
+            f"elapsed_minutes={(time.monotonic() - started) / 60:.1f}",
+            flush=True,
+        )
+    return pd.concat(blocks, ignore_index=True) if blocks else _empty_candidates()
+
+
+def _token_document(name: str, address: str, number_signature: str) -> str:
+    """Keep name, address, and number evidence in separate hash namespaces."""
+    terms = {f"n:{word}" for word in name.split() if len(word) >= 2}
+    terms.update(f"a:{word}" for word in address.split() if len(word) >= 4 and not word.isdigit())
+    terms.update(f"d:{number}" for number in number_signature.split("|") if len(number) >= 2)
+    return " ".join(sorted(terms))
+
+
+def _token_documents(frame: pd.DataFrame) -> list[str]:
+    return [
+        _token_document(name, address, numbers)
+        for name, address, numbers in zip(
+            frame["name_punct"], frame["address_punct"], frame["address_numbers"]
+        )
+    ]
+
+
+def token_hash_block(
+    queries: pd.DataFrame,
+    candidates: pd.DataFrame,
+    target_source: str,
+    top_k: int,
+    min_similarity: float,
+    hash_features: int,
+    query_chunk_size: int,
+    max_document_frequency: int,
+    threads: int,
+    deadline: float | None = None,
+) -> pd.DataFrame:
+    """Search a bounded sparse token index, retaining rare multilingual terms."""
+    if top_k <= 0 or queries.empty or candidates.empty:
+        return _empty_candidates()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError(f"Candidate deadline reached before {target_source}/token_tfidf.")
+
+    from sparse_dot_topn import sp_matmul_topn
+
+    started = time.monotonic()
+    print(
+        f"[candidates] {target_source}/token_tfidf: hashing {len(candidates):,} target records "
+        f"into {hash_features:,} features",
+        flush=True,
+    )
+    vectorizer = HashingVectorizer(
+        analyzer=str.split,
+        n_features=hash_features,
+        alternate_sign=False,
+        norm=None,
+        dtype=np.float32,
+    )
+    right = vectorizer.transform(_token_documents(candidates)).tocsr()
+    frequencies = np.diff(right.tocsc().indptr)
+    common = frequencies > max_document_frequency
+    if common.any():
+        right.data[common[right.indices]] = 0
+        right.eliminate_zeros()
+    transformer = TfidfTransformer(norm="l2", sublinear_tf=True)
+    right = transformer.fit_transform(right).tocsr()
+    right_transposed = right.T.tocsr()
+    del right
+    print(
+        f"[candidates] {target_source}/token_tfidf: index ready | "
+        f"nnz={right_transposed.nnz:,} | common_buckets={int(common.sum()):,} | "
+        f"seconds={time.monotonic() - started:.1f}",
+        flush=True,
+    )
+
+    query_ids = queries["entity_id"].to_numpy()
+    candidate_ids = candidates["entity_id"].to_numpy()
+    blocks: list[pd.DataFrame] = []
+    total = len(queries)
+    total_chunks = (total + query_chunk_size - 1) // query_chunk_size
+    for number, start in enumerate(range(0, total, query_chunk_size), start=1):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError(f"Candidate deadline reached during {target_source}/token_tfidf.")
+        end = min(start + query_chunk_size, total)
+        chunk_started = time.monotonic()
+        left = vectorizer.transform(_token_documents(queries.iloc[start:end])).tocsr()
+        if common.any():
+            left.data[common[left.indices]] = 0
+            left.eliminate_zeros()
+        left = transformer.transform(left).tocsr()
+        similarities = sp_matmul_topn(
+            left,
+            right_transposed,
+            top_n=top_k,
+            threshold=min_similarity,
+            n_threads=threads,
+            sort=True,
+        ).tocsr()
+        row_counts = np.diff(similarities.indptr)
+        if similarities.nnz:
+            row_positions = np.repeat(np.arange(end - start), row_counts)
+            blocks.append(
+                _lane_frame(
+                    query_ids[start:end][row_positions],
+                    candidate_ids[similarities.indices],
+                    target_source,
+                    "token_tfidf",
+                    similarities.data.astype(np.float32),
+                )
+            )
+        print(
+            f"[candidates] {target_source}/token_tfidf: chunk {number}/{total_chunks} | "
+            f"queries={end:,}/{total:,} | pairs={similarities.nnz:,} | "
+            f"chunk_seconds={time.monotonic() - chunk_started:.1f} | "
+            f"elapsed_minutes={(time.monotonic() - started) / 60:.1f}",
+            flush=True,
+        )
+    return pd.concat(blocks, ignore_index=True) if blocks else _empty_candidates()
 
 
 def combine_candidate_lanes(
@@ -192,7 +357,9 @@ def combine_candidate_lanes(
         combined[column] = combined[column].fillna(0).astype(np.float32)
     keys = ["source1_entity_id", "candidate_entity_id", "target_source"]
     combined = combined.groupby(keys, as_index=False, sort=False)[SIGNAL_COLUMNS].max()
-    combined["retrieval_score"] = combined[["name_tfidf", "address_tfidf", "dense_score"]].max(axis=1)
+    combined["retrieval_score"] = combined[
+        ["name_tfidf", "address_tfidf", "token_tfidf", "dense_score"]
+    ].max(axis=1)
     exact_columns = ["exact_name", "exact_address", "exact_name_core", "exact_numbers"]
     combined["retrieval_score"] += 0.35 * combined[exact_columns].max(axis=1)
     combined.sort_values(
@@ -210,27 +377,65 @@ def generate_candidates_for_source(
     candidates: pd.DataFrame,
     target_source: str,
     config: dict,
+    deadline: float | None = None,
 ) -> pd.DataFrame:
     ngram_range = (int(config["char_ngram_min"]), int(config["char_ngram_max"]))
+    # Exact blocks are bounded on both sides by exact_limit, so repeated values
+    # cannot create an unbounded many-to-many join.
     exact_specs = [
         ("name_norm", "exact_name"),
         ("address_punct", "exact_address"),
         ("name_core", "exact_name_core"),
         ("address_numbers", "exact_numbers"),
     ]
-    lanes = [
-        exact_block(
+    exact_limit = min(
+        int(config["max_exact_block_size"]),
+        int(config["max_candidates_per_query"]),
+    )
+    lanes: list[pd.DataFrame] = []
+    for key, signal in exact_specs:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError(f"Candidate retrieval deadline reached before {target_source}/{signal}.")
+        lane_started = time.monotonic()
+        print(f"[candidates] {target_source}/{signal}: exact blocking", flush=True)
+        lane = exact_block(
             queries,
             candidates,
             key,
             target_source,
             signal,
-            int(config["max_exact_block_size"]),
+            exact_limit,
         )
-        for key, signal in exact_specs
-    ]
-    lanes.extend(
-        [
+        lanes.append(lane)
+        print(
+            f"[candidates] {target_source}/{signal}: {len(lane):,} pairs | "
+            f"elapsed_seconds={time.monotonic() - lane_started:.1f}",
+            flush=True,
+        )
+
+    method = config.get("method", "char_tfidf")
+    print(
+        f"[candidates] {target_source}: {method} retrieval for all {len(queries):,} queries; "
+        "one Source-1 entity may have multiple true matches",
+        flush=True,
+    )
+    if method == "token_hash":
+        lanes.append(
+            token_hash_block(
+                queries,
+                candidates,
+                target_source,
+                int(config["token_top_k"]),
+                float(config["token_min_similarity"]),
+                int(config["token_hash_features"]),
+                int(config["token_query_chunk_size"]),
+                int(config["max_tfidf_document_frequency"]),
+                int(config["token_threads"]),
+                deadline,
+            )
+        )
+    elif method == "char_tfidf":
+        lanes.extend([
             tfidf_block(
                 queries,
                 candidates,
@@ -241,6 +446,9 @@ def generate_candidates_for_source(
                 float(config["min_name_similarity"]),
                 ngram_range,
                 int(config["max_tfidf_features"]),
+                int(config.get("tfidf_query_chunk_size", 2_000)),
+                deadline,
+                int(config.get("max_tfidf_document_frequency", 5_000)),
             ),
             tfidf_block(
                 queries,
@@ -252,9 +460,13 @@ def generate_candidates_for_source(
                 float(config["min_address_similarity"]),
                 ngram_range,
                 int(config["max_tfidf_features"]),
+                int(config.get("tfidf_query_chunk_size", 2_000)),
+                deadline,
+                int(config.get("max_tfidf_document_frequency", 5_000)),
             ),
-        ]
-    )
+        ])
+    else:
+        raise ValueError(f"Unsupported candidate method: {method}")
     return combine_candidate_lanes(lanes, int(config["max_candidates_per_query"]))
 
 

@@ -75,10 +75,20 @@ class PipelineIntegrationTests(unittest.TestCase):
                     "time_budget_minutes": 10,
                     "output_reserve_minutes": 1,
                     "feature_chunk_rows": 75,
+                    "train_queries_per_country": 120,
                 }
             )
             config["candidate_generation"].update(
-                {"name_top_k": 3, "address_top_k": 3, "max_candidates_per_query": 8}
+                {
+                    "method": "token_hash",
+                    "token_top_k": 3,
+                    "token_hash_features": 4096,
+                    "token_query_chunk_size": 30,
+                    "token_threads": 1,
+                    "name_top_k": 3,
+                    "address_top_k": 3,
+                    "max_candidates_per_query": 8,
+                }
             )
             config["training"].update(
                 {

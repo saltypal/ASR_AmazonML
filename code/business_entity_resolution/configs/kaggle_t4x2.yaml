@@ -1,25 +1,34 @@
 project:
   seed: 42
-  time_budget_minutes: 480
-  output_reserve_minutes: 35
+  time_budget_minutes: 180
+  output_reserve_minutes: 20
   chunksize: 250000
-  feature_chunk_rows: 400000
+  feature_chunk_rows: 200000
   sample_rows_per_file: null
+  train_queries_per_country: 50000
 
 candidate_generation:
+  method: token_hash
+  token_top_k: 20
+  token_min_similarity: 0.01
+  token_hash_features: 4194304
+  token_query_chunk_size: 10000
+  token_threads: 4
   name_top_k: 12
   address_top_k: 10
-  semantic_pairs_per_query: 3
-  max_candidates_per_query: 30
-  max_exact_block_size: 200
+  semantic_pairs_per_query: 0
+  max_candidates_per_query: 24
+  max_exact_block_size: 20
   char_ngram_min: 3
   char_ngram_max: 5
   min_name_similarity: 0.18
   min_address_similarity: 0.16
   max_tfidf_features: 400000
+  tfidf_query_chunk_size: 2000
+  max_tfidf_document_frequency: 10000
 
 embeddings:
-  enabled: true
+  enabled: false
   model_name: intfloat/multilingual-e5-small
   model_path: null
   max_length: 128
@@ -30,13 +39,13 @@ embeddings:
 training:
   validation_fraction: 0.10
   holdout_fraction: 0.10
-  tuning_trials: 12
-  tuning_timeout_seconds: 2400
-  tuning_sample_rows: 4000000
+  tuning_trials: 4
+  tuning_timeout_seconds: 1200
+  tuning_sample_rows: 1000000
   max_negatives_per_query: 8
-  early_stopping_rounds: 75
-  max_boost_rounds: 1400
+  early_stopping_rounds: 50
+  max_boost_rounds: 800
   threshold_min: 0.20
   threshold_max: 0.98
-  threshold_steps: 79
+  threshold_steps: 40
   device: cuda

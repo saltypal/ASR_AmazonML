@@ -7,6 +7,10 @@ commands, and AWS instructions are in
 [`code/business_entity_resolution/README.md`](code/business_entity_resolution/README.md).
 The portable Kaggle launcher is
 [`Experiment_Notebooks/03_Kaggle_End_to_End.ipynb`](Experiment_Notebooks/03_Kaggle_End_to_End.ipynb).
+For the three-hour deadline run, use
+[`Experiment_Notebooks/04_Kaggle_Three_Hour_Run.ipynb`](Experiment_Notebooks/04_Kaggle_Three_Hour_Run.ipynb)
+with the settings and measured local retrieval check in
+[`code/business_entity_resolution/THREE_HOUR_RUN.md`](code/business_entity_resolution/THREE_HOUR_RUN.md).
 For the full first-principles explanation, efficiency analysis, Sentence Transformer decision,
 stage contracts, and Kaggle/AWS experiment plan, read
 [`PROJECT_EXPLANATION.md`](PROJECT_EXPLANATION.md).
