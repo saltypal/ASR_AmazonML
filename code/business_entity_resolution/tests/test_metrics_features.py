@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -30,7 +31,11 @@ class MetricsAndFeatureTests(unittest.TestCase):
             "min_name_similarity": 0.0, "min_address_similarity": 0.0, "max_tfidf_features": 1000,
         }
         pairs = generate_candidates_for_source(queries, corpus, "S2", config)
-        features = build_pair_features(pairs, queries, corpus)
+        with patch("ber.features.FEATURE_WORKERS", 1):
+            serial_features = build_pair_features(pairs, queries, corpus)
+        with patch("ber.features.FEATURE_WORKERS", 8):
+            features = build_pair_features(pairs, queries, corpus)
+        pd.testing.assert_frame_equal(serial_features, features)
         self.assertTrue(set(FEATURE_COLUMNS) <= set(features.columns))
         labeled = label_pair_features(features, {"S1-1": {"S2-1"}})
         self.assertEqual(int(labeled.loc[labeled.candidate_entity_id == "S2-1", "label"].iloc[0]), 1)

@@ -43,7 +43,17 @@ FEATURE_COLUMNS = [
     "target_is_source3",
 ]
 
-FEATURE_WORKERS = min(4, os.cpu_count() or 1)
+def _available_cpu_count() -> int:
+    """Return the CPUs available to this process, respecting affinity where supported."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
+# RapidFuzz releases the GIL while scoring. Use more of the CPU allocation on
+# multi-core Kaggle runtimes, while keeping a conservative upper bound.
+FEATURE_WORKERS = min(8, _available_cpu_count())
 
 
 def _ratio(left: str, right: str) -> float:

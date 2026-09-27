@@ -12,7 +12,7 @@ import pandas as pd
 
 from .candidates import candidate_recall, combine_candidate_lanes, generate_candidates_for_source
 from .embeddings import launch_parallel_encoding, load_embeddings
-from .features import FEATURE_COLUMNS, build_pair_features, label_pair_features
+from .features import FEATURE_COLUMNS, FEATURE_WORKERS, build_pair_features, label_pair_features
 from .io import (
     available_country_slugs,
     dataset_files,
@@ -379,10 +379,18 @@ def feature_stage(
         }
         country_destination = destination / f"country={country_slug}"
         country_destination.mkdir(parents=True, exist_ok=True)
-        total_rows = total_positives = 0
+        total_rows = total_positives = processed_pairs = 0
+        feature_started = time.monotonic()
+        expected_pairs = len(pairs)
+        print(
+            f"[features] {split}/{country_slug}: input_pairs={expected_pairs:,} | "
+            f"feature_workers={FEATURE_WORKERS}",
+            flush=True,
+        )
         for part_number, pair_chunk in enumerate(
             _query_aligned_chunks(pairs, int(config["project"]["feature_chunk_rows"]))
         ):
+            processed_pairs += len(pair_chunk)
             chunk_features = []
             for target_label in ("S2", "S3"):
                 source_pairs = pair_chunk[pair_chunk["target_source"] == target_label]
@@ -419,9 +427,16 @@ def feature_stage(
             _atomic_parquet(
                 features, country_destination / f"part-{part_number:05d}.parquet"
             )
+            elapsed = max(time.monotonic() - feature_started, 1e-9)
+            pairs_per_second = processed_pairs / elapsed
+            remaining_pairs = max(0, expected_pairs - processed_pairs)
+            eta_minutes = remaining_pairs / pairs_per_second / 60.0
             print(
                 f"[features] {split}/{country_slug}: part={part_number + 1} | "
-                f"rows={len(features):,} | cumulative_rows={total_rows:,}",
+                f"rows={len(features):,} | cumulative_rows={total_rows:,} | "
+                f"pairs={processed_pairs:,}/{expected_pairs:,} | "
+                f"rate={pairs_per_second:,.0f}/s | elapsed={elapsed / 60:.1f} min | "
+                f"eta={eta_minutes:.1f} min",
                 flush=True,
             )
         summaries.append(
@@ -431,7 +446,12 @@ def feature_stage(
                 "positives": total_positives if truth is not None else None,
             }
         )
-        print(f"[features] {split}/{country_slug}: {total_rows:,} model rows")
+        print(
+            f"[features] {split}/{country_slug}: {total_rows:,} model rows from "
+            f"{processed_pairs:,} candidate pairs in "
+            f"{(time.monotonic() - feature_started) / 60:.1f} min",
+            flush=True,
+        )
     summary = {"split": split, "countries": summaries}
     write_json(destination / "manifest.json", summary)
     return summary
