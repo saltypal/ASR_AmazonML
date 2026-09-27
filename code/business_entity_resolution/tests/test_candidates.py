@@ -82,6 +82,8 @@ class CandidateTests(unittest.TestCase):
             {
                 "method": "token_hash",
                 "token_top_k": 3,
+                "token_address_top_k": 3,
+                "token_address_max_document_frequency": 100,
                 "token_min_similarity": 0.01,
                 "token_hash_features": 4096,
                 "token_query_chunk_size": 1,
@@ -103,6 +105,7 @@ class CandidateTests(unittest.TestCase):
         match = pairs.loc[pairs["candidate_entity_id"].eq("S2-1")]
         self.assertEqual(len(match), 1)
         self.assertGreater(float(match["token_tfidf"].iloc[0]), 0.0)
+        self.assertGreater(float(match["address_tfidf"].iloc[0]), 0.0)
 
 
 if __name__ == "__main__":

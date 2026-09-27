@@ -10,6 +10,8 @@ project:
 candidate_generation:
   method: token_hash
   token_top_k: 20
+  token_address_top_k: 20
+  token_address_max_document_frequency: 20000
   token_min_similarity: 0.01
   token_hash_features: 4194304
   token_query_chunk_size: 10000
@@ -17,7 +19,7 @@ candidate_generation:
   name_top_k: 12
   address_top_k: 10
   semantic_pairs_per_query: 0
-  max_candidates_per_query: 24
+  max_candidates_per_query: 32
   max_exact_block_size: 20
   char_ngram_min: 3
   char_ngram_max: 5

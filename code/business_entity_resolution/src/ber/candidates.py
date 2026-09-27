@@ -249,6 +249,14 @@ def _token_documents(frame: pd.DataFrame) -> list[str]:
     ]
 
 
+def _address_token_documents(frame: pd.DataFrame) -> list[str]:
+    """Provide an address-only view when business names use different scripts."""
+    return [
+        _token_document("", address, numbers)
+        for address, numbers in zip(frame["address_punct"], frame["address_numbers"])
+    ]
+
+
 def token_hash_block(
     queries: pd.DataFrame,
     candidates: pd.DataFrame,
@@ -260,18 +268,22 @@ def token_hash_block(
     max_document_frequency: int,
     threads: int,
     deadline: float | None = None,
+    *,
+    address_only: bool = False,
 ) -> pd.DataFrame:
     """Search a bounded sparse token index, retaining rare multilingual terms."""
+    signal = "address_tfidf" if address_only else "token_tfidf"
+    documents = _address_token_documents if address_only else _token_documents
     if top_k <= 0 or queries.empty or candidates.empty:
         return _empty_candidates()
     if deadline is not None and time.monotonic() >= deadline:
-        raise TimeoutError(f"Candidate deadline reached before {target_source}/token_tfidf.")
+        raise TimeoutError(f"Candidate deadline reached before {target_source}/{signal}.")
 
     from sparse_dot_topn import sp_matmul_topn
 
     started = time.monotonic()
     print(
-        f"[candidates] {target_source}/token_tfidf: hashing {len(candidates):,} target records "
+        f"[candidates] {target_source}/{signal}: hashing {len(candidates):,} target records "
         f"into {hash_features:,} features",
         flush=True,
     )
@@ -282,7 +294,7 @@ def token_hash_block(
         norm=None,
         dtype=np.float32,
     )
-    right = vectorizer.transform(_token_documents(candidates)).tocsr()
+    right = vectorizer.transform(documents(candidates)).tocsr()
     frequencies = np.diff(right.tocsc().indptr)
     common = frequencies > max_document_frequency
     if common.any():
@@ -293,7 +305,7 @@ def token_hash_block(
     right_transposed = right.T.tocsr()
     del right
     print(
-        f"[candidates] {target_source}/token_tfidf: index ready | "
+        f"[candidates] {target_source}/{signal}: index ready | "
         f"nnz={right_transposed.nnz:,} | common_buckets={int(common.sum()):,} | "
         f"seconds={time.monotonic() - started:.1f}",
         flush=True,
@@ -306,10 +318,10 @@ def token_hash_block(
     total_chunks = (total + query_chunk_size - 1) // query_chunk_size
     for number, start in enumerate(range(0, total, query_chunk_size), start=1):
         if deadline is not None and time.monotonic() >= deadline:
-            raise TimeoutError(f"Candidate deadline reached during {target_source}/token_tfidf.")
+            raise TimeoutError(f"Candidate deadline reached during {target_source}/{signal}.")
         end = min(start + query_chunk_size, total)
         chunk_started = time.monotonic()
-        left = vectorizer.transform(_token_documents(queries.iloc[start:end])).tocsr()
+        left = vectorizer.transform(documents(queries.iloc[start:end])).tocsr()
         if common.any():
             left.data[common[left.indices]] = 0
             left.eliminate_zeros()
@@ -330,12 +342,12 @@ def token_hash_block(
                     query_ids[start:end][row_positions],
                     candidate_ids[similarities.indices],
                     target_source,
-                    "token_tfidf",
+                    signal,
                     similarities.data.astype(np.float32),
                 )
             )
         print(
-            f"[candidates] {target_source}/token_tfidf: chunk {number}/{total_chunks} | "
+            f"[candidates] {target_source}/{signal}: chunk {number}/{total_chunks} | "
             f"queries={end:,}/{total:,} | pairs={similarities.nnz:,} | "
             f"chunk_seconds={time.monotonic() - chunk_started:.1f} | "
             f"elapsed_minutes={(time.monotonic() - started) / 60:.1f}",
@@ -434,6 +446,22 @@ def generate_candidates_for_source(
                 deadline,
             )
         )
+        if int(config.get("token_address_top_k", 0)) > 0:
+            lanes.append(
+                token_hash_block(
+                    queries,
+                    candidates,
+                    target_source,
+                    int(config["token_address_top_k"]),
+                    float(config["token_min_similarity"]),
+                    int(config["token_hash_features"]),
+                    int(config["token_query_chunk_size"]),
+                    int(config["token_address_max_document_frequency"]),
+                    int(config["token_threads"]),
+                    deadline,
+                    address_only=True,
+                )
+            )
     elif method == "char_tfidf":
         lanes.extend([
             tfidf_block(

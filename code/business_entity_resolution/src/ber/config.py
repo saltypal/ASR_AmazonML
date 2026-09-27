@@ -22,6 +22,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "candidate_generation": {
         "method": "char_tfidf",
         "token_top_k": 12,
+        "token_address_top_k": 0,
+        "token_address_max_document_frequency": 20_000,
         "token_min_similarity": 0.01,
         "token_hash_features": 4_194_304,
         "token_query_chunk_size": 10_000,
@@ -135,6 +137,10 @@ def validate_config(config: dict[str, Any]) -> None:
     for key in ("token_top_k", "token_hash_features", "token_query_chunk_size", "token_threads"):
         if candidates[key] <= 0:
             raise ValueError(f"candidate_generation.{key} must be positive.")
+    if candidates["token_address_top_k"] < 0:
+        raise ValueError("candidate_generation.token_address_top_k cannot be negative.")
+    if candidates["token_address_max_document_frequency"] <= 0:
+        raise ValueError("candidate_generation.token_address_max_document_frequency must be positive.")
     if not 0 <= candidates["token_min_similarity"] <= 1:
         raise ValueError("token_min_similarity must be between 0 and 1.")
     if not 1 <= candidates["max_candidates_per_query"] <= 500:

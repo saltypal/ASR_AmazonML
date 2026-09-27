@@ -6,11 +6,12 @@ The notebook logs each preprocessing file and chunk, country and source retrieva
 
 ## Why this configuration
 
-The original character n-gram TF-IDF search stalled on the first full India source. The deadline configuration uses exact name, address, core-name, and address-number blocks plus sparse hashed TF-IDF on Unicode name tokens, address words, and address numbers. It prunes very common hash buckets and searches queries in bounded chunks. No translation or embedding download is required. XGBoost trains on a random 50,000 Source-1 queries per training country against the complete Source-2 and Source-3 pools; all test Source-1 queries are processed. The model uses one GPU. The second T4 does not accelerate a single booster in this configuration.
+The original character n-gram TF-IDF search stalled on the first full India source. The deadline configuration uses exact name, address, core-name, and address-number blocks plus sparse hashed TF-IDF on Unicode name tokens, address words, and address numbers. A separate address-only token lane rescues records whose names use different scripts. It prunes very common hash buckets and searches queries in bounded chunks. No translation or embedding download is required. XGBoost trains on a random 50,000 Source-1 queries per training country against the complete Source-2 and Source-3 pools; all test Source-1 queries are processed. The model uses one GPU. The second T4 does not accelerate a single booster in this configuration.
 
 Local checks on 2026-09-27, before a Kaggle production run:
 
-- Full India Source-2 pool: 2,000,000 targets and 5,000 sampled Source-1 queries. Candidate generation after record preparation took 63.8 seconds and recovered 7,573 of 8,304 known links (91.20%) within the configured 24 candidates per query. This is **candidate recall**, not model F0.5 or leaderboard accuracy.
+- Full India Source-2 pool: 2,000,000 targets and 5,000 sampled Source-1 queries. The earlier single-token-lane configuration recovered 7,573 of 8,304 known links (91.20%) within 24 candidates per query in 63.8 seconds after preparation. This is **candidate recall**, not model F0.5 or leaderboard accuracy.
+- On the same sample, merging an address-only top-20 lane with the old 24-capped pairs and then retaining 32 candidates recovered 93.65% of links and all true matches for 90.00% of entities. This is a local retrieval experiment; the complete Kaggle run and its global S2/S3 cap remain unmeasured.
 - The optimized feature builder processed about 100,000 real candidate pairs in 4.2 seconds locally, compared with 19.8 seconds before that change.
 - The synthetic end-to-end integration test and candidate tests run with `python -m pytest -q code/business_entity_resolution/tests` from the repository root.
 
