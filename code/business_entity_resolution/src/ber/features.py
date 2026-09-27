@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+from functools import lru_cache
+
 import numpy as np
 import pandas as pd
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 from .candidates import SIGNAL_COLUMNS
 from .normalization import TOKEN_PATTERN
@@ -40,6 +43,8 @@ FEATURE_COLUMNS = [
     "target_is_source3",
 ]
 
+FEATURE_WORKERS = min(4, os.cpu_count() or 1)
+
 
 def _ratio(left: str, right: str) -> float:
     return fuzz.ratio(left, right, score_cutoff=0) / 100.0
@@ -49,10 +54,16 @@ def _token_set_ratio(left: str, right: str) -> float:
     return fuzz.token_set_ratio(left, right, score_cutoff=0) / 100.0
 
 
+@lru_cache(maxsize=16_384)
+def _normalized_tokens(text: str) -> frozenset[str]:
+    # Each query participates in many candidate pairs, so parse its tokens once.
+    return frozenset(TOKEN_PATTERN.findall(text))
+
+
 def _normalized_token_jaccard(left: str, right: str) -> float:
     """The inputs are already Unicode and punctuation normalized at ingest."""
-    left_tokens = set(TOKEN_PATTERN.findall(left))
-    right_tokens = set(TOKEN_PATTERN.findall(right))
+    left_tokens = _normalized_tokens(left)
+    right_tokens = _normalized_tokens(right)
     if not left_tokens and not right_tokens:
         return 1.0
     union = left_tokens | right_tokens
@@ -119,16 +130,26 @@ def build_pair_features(
     c_name = merged["c_name_punct"].astype(str)
     q_address = merged["q_address_punct"].astype(str)
     c_address = merged["c_address_punct"].astype(str)
-    name_pairs = zip(q_name, c_name)
-    address_pairs = zip(q_address, c_address)
-    merged["name_ratio"] = np.fromiter((_ratio(a, b) for a, b in name_pairs), dtype=np.float32)
-    merged["address_ratio"] = np.fromiter((_ratio(a, b) for a, b in address_pairs), dtype=np.float32)
-    merged["name_token_set_ratio"] = np.fromiter(
-        (_token_set_ratio(a, b) for a, b in zip(q_name, c_name)), dtype=np.float32
-    )
-    merged["address_token_set_ratio"] = np.fromiter(
-        (_token_set_ratio(a, b) for a, b in zip(q_address, c_address)), dtype=np.float32
-    )
+    q_name_list = q_name.tolist()
+    c_name_list = c_name.tolist()
+    q_address_list = q_address.tolist()
+    c_address_list = c_address.tolist()
+    merged["name_ratio"] = process.cpdist(
+        q_name_list, c_name_list, scorer=fuzz.ratio,
+        workers=FEATURE_WORKERS, dtype=np.float32,
+    ) / 100.0
+    merged["address_ratio"] = process.cpdist(
+        q_address_list, c_address_list, scorer=fuzz.ratio,
+        workers=FEATURE_WORKERS, dtype=np.float32,
+    ) / 100.0
+    merged["name_token_set_ratio"] = process.cpdist(
+        q_name_list, c_name_list, scorer=fuzz.token_set_ratio,
+        workers=FEATURE_WORKERS, dtype=np.float32,
+    ) / 100.0
+    merged["address_token_set_ratio"] = process.cpdist(
+        q_address_list, c_address_list, scorer=fuzz.token_set_ratio,
+        workers=FEATURE_WORKERS, dtype=np.float32,
+    ) / 100.0
     merged["name_jaccard"] = np.fromiter(
         (_normalized_token_jaccard(a, b) for a, b in zip(q_name, c_name)), dtype=np.float32
     )
